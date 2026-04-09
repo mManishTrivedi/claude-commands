@@ -1,0 +1,42 @@
+#!/bin/bash
+# Pre-commit hook: Block commits containing private/project-specific terms.
+#
+# HOW TO USE:
+#   1. Add your private terms (one per line) to .githooks/blocklist.txt
+#   2. That file is .gitignored so it stays local-only
+#
+# Example .githooks/blocklist.txt:
+#   my-secret-service
+#   /ecs/my-project-
+#   my-company-prod
+
+BLOCKLIST_FILE="$(git rev-parse --show-toplevel)/.githooks/blocklist.txt"
+
+if [ ! -f "$BLOCKLIST_FILE" ]; then
+  # No blocklist configured — nothing to check
+  exit 0
+fi
+
+ERRORS=0
+
+while IFS= read -r term || [ -n "$term" ]; do
+  # Skip empty lines and comments
+  [[ -z "$term" || "$term" =~ ^# ]] && continue
+
+  MATCHES=$(git diff --cached --diff-filter=ACMR -S "$term" --name-only 2>/dev/null)
+  if [ -n "$MATCHES" ]; then
+    echo "BLOCKED: Private term \"$term\" found in staged files:"
+    echo "$MATCHES" | sed 's/^/  - /'
+    ERRORS=$((ERRORS + 1))
+  fi
+done < "$BLOCKLIST_FILE"
+
+if [ $ERRORS -gt 0 ]; then
+  echo ""
+  echo "Commit aborted. Remove private/project-specific terms before committing."
+  echo "Edit blocklist: $BLOCKLIST_FILE"
+  echo "To bypass (if intentional): git commit --no-verify"
+  exit 1
+fi
+
+exit 0

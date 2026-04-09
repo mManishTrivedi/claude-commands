@@ -11,3 +11,6 @@
 # Windows
 Thumbs.db
 .cursor/hooks/state/continual-learning.json
+
+# Private blocklist (local only — never commit)
+.githooks/blocklist.txt
