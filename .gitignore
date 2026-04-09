@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+
+# Windows
+Thumbs.db
+.cursor/hooks/state/continual-learning.json
