@@ -1,27 +1,32 @@
 ---
-description: "Download AWS CloudWatch logs and extract errors. Supports time ranges, profiles, services, and environments."
+description: "Download AWS CloudWatch logs and extract errors using awslogs CLI. Supports time ranges, profiles, live tail, and error summaries."
 ---
 
-## AWS CloudWatch Log Downloader
+## AWS CloudWatch Log Downloader (via awslogs)
 
 You are downloading AWS CloudWatch logs and extracting errors using **only bash commands** (no AI token consumption for log parsing). Parse the user's arguments from: $ARGUMENTS
 
 ### Prerequisites Check
 
-**FIRST**, verify AWS CLI is installed:
+**FIRST**, verify `awslogs` is installed:
 ```bash
-command -v aws >/dev/null 2>&1 && aws --version || echo "AWS_CLI_NOT_FOUND"
+command -v awslogs >/dev/null 2>&1 && echo "AWSLOGS_OK" || echo "AWSLOGS_NOT_FOUND"
 ```
-If `AWS_CLI_NOT_FOUND`, stop immediately and tell the user:
-> AWS CLI is not installed. Install it with:
-> - macOS: `brew install awscli`
-> - Linux: `curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip && sudo ./aws/install`
+If `AWSLOGS_NOT_FOUND`, install it:
+```bash
+pip3 install awslogs
+```
+If pip fails, try:
+```bash
+pip install awslogs
+```
+If both fail, stop and tell the user to install Python 3 and pip first.
 
-Also verify the profile works:
+Then verify AWS credentials work with the given profile:
 ```bash
-aws sts get-caller-identity --profile <profile> 2>&1 || echo "AWS_AUTH_FAILED"
+AWS_PROFILE=<profile> AWS_REGION=<region> awslogs groups 2>&1 | head -5
 ```
-If auth fails, stop and tell the user to check their AWS credentials/profile.
+If auth fails, stop and tell the user to check their AWS credentials/profile with `aws configure --profile <profile>`.
 
 ### Argument Parsing
 
@@ -31,70 +36,66 @@ Arguments are key-value flags. All are optional with sensible defaults:
 |------|-------|---------|-------------|
 | `--log-group` | `-g` | (auto-discover) | Full CloudWatch log group path (e.g. `/ecs/my-api-prod`) |
 | `--prefix` | | `/ecs` | Log group name prefix — used for auto-discovery if `--log-group` is not set |
-| `--env` | `-e` | `production` | Environment: `production`, `staging`, `dev`, etc. |
-| `--last` | `-l` | `2h` | Time window: `30m`, `2h`, `5d`, etc. (m=minutes, h=hours, d=days) |
-| `--from` | | | Start time: ISO 8601 (`2025-04-01T00:00:00Z`) or epoch ms |
-| `--to` | | | End time: ISO 8601 or epoch ms (defaults to now) |
+| `--last` | `-l` | `2h` | Relative time: `30m`, `2h`, `5d` (shorthand for `--start`) |
+| `--from` | | | Start time: `YYYY-MM-DD HH:MM:SS`, ISO 8601, or relative like `2h ago` |
+| `--to` | | | End time: same formats as `--from` (defaults to now) |
 | `--profile` | `-p` | `default` | AWS CLI named profile |
 | `--region` | `-r` | `us-east-1` | AWS region |
-| `--filter` | `-f` | | CloudWatch filter pattern (e.g. `"ERROR"`, `"status=500"`) |
-| `--errors-only` | | `false` | Only download error/exception lines |
+| `--filter` | `-f` | | Grep filter pattern applied after download (e.g. `"ERROR"`, `"status=500"`) |
+| `--errors-only` | | `false` | Only extract error/exception lines |
 | `--raw` | | `false` | Skip error extraction, just download raw logs |
 | `--output` | `-o` | `./aws-logs/` | Output directory |
 | `--tail` | `-t` | | Live tail mode — stream logs in real time (Ctrl+C to stop) |
+| `--watch` | `-w` | | Alias for `--tail` |
+| `--streams` | | | Filter to specific log stream(s) — passed to `awslogs get --log-stream-name` |
 
 **Examples:**
-- `/aws-logs` — auto-discover log groups, pick one, last 2h + error summary
-- `/aws-logs -g /ecs/my-api-prod -l 5d` — specific log group, last 5 days
-- `/aws-logs --prefix /ecs -e staging -l 1h` — discover staging log groups, last hour
-- `/aws-logs -g /aws/lambda/my-func --from 2025-04-01T00:00:00Z --to 2025-04-02T00:00:00Z` — lambda logs, specific range
-- `/aws-logs -p my-profile -l 2d --errors-only` — only errors, last 2 days
+- `/aws-logs -g /ecs/my-api-prod` — last 2h of logs + error summary
+- `/aws-logs -g /ecs/my-api-prod -l 5d` — last 5 days of logs
+- `/aws-logs -g /ecs/my-store-staging -l 1h` — staging logs, last hour
+- `/aws-logs -g /ecs/my-api-prod --from '2026-04-03 00:00:00' --to '2026-04-03 23:59:59'` — specific date range
+- `/aws-logs -g /ecs/my-api-prod -p my-profile -r us-east-2 -l 2d --errors-only` — errors only
 - `/aws-logs -g /ecs/my-api-prod -t` — live tail (real-time streaming)
-- `/aws-logs -f "OutOfMemory"` — filter for specific pattern
+- `/aws-logs -g /aws/lambda/my-func -f "OutOfMemory" -l 6h` — download then grep for pattern
 
 ### Log Group Resolution
 
-Resolve the target log group in this order:
+If `--log-group` is provided, use it directly.
 
-1. **If `--log-group` is provided**: Use it directly as-is.
-2. **If `--log-group` is NOT provided**: Auto-discover available log groups:
-   ```bash
-   aws logs describe-log-groups \
-     --log-group-name-prefix "<prefix>" \
-     --profile <profile> --region <region> \
-     --query 'logGroups[].logGroupName' --output text
-   ```
-   - Show the user the list of discovered log groups
-   - Ask which one they want to download logs from
-   - If only one group exists, use it automatically
+If `--log-group` is NOT provided, auto-discover available log groups:
+```bash
+AWS_PROFILE=<profile> AWS_REGION=<region> awslogs groups | grep "<prefix>"
+```
+- Show the user the list of discovered log groups
+- Ask which one they want to download logs from
+- If only one group matches, use it automatically
 
 ### Step-by-Step Execution
 
 Run ALL of the following using **bash commands only**. Do NOT use AI to parse or summarize logs.
 
-#### Step 1: Compute time range
+#### Step 1: Build the awslogs time arguments
 
-Convert `--last` to epoch milliseconds:
+`awslogs` accepts human-readable time strings for `--start` and `--end`:
+
+**If `--last` is provided** (e.g., `2h`, `5d`, `30m`):
 ```bash
-# For --last flag (e.g., 2h, 5d, 30m)
-UNIT="${LAST: -1}"    # last char: m, h, or d
-VALUE="${LAST%?}"     # everything except last char
-
-case "$UNIT" in
-  m) START_MS=$(( ($(date +%s) - VALUE * 60) * 1000 )) ;;
-  h) START_MS=$(( ($(date +%s) - VALUE * 3600) * 1000 )) ;;
-  d) START_MS=$(( ($(date +%s) - VALUE * 86400) * 1000 )) ;;
-esac
-END_MS=$(( $(date +%s) * 1000 ))
+# Convert shorthand to awslogs format
+# 2h  → --start='2h ago'
+# 5d  → --start='5d ago'
+# 30m → --start='30m ago'
+START_ARG="--start='${LAST} ago'"
+# No --end needed (defaults to now)
 ```
 
-If `--from`/`--to` are provided, convert ISO 8601 to epoch ms:
+**If `--from`/`--to` are provided**:
 ```bash
-# macOS
-START_MS=$(( $(date -j -f "%Y-%m-%dT%H:%M:%SZ" "2025-04-01T00:00:00Z" +%s) * 1000 ))
-# Linux
-START_MS=$(( $(date -d "2025-04-01T00:00:00Z" +%s) * 1000 ))
+# awslogs accepts these directly
+START_ARG="--start='2026-04-03 00:00:00'"
+END_ARG="--end='2026-04-03 23:59:59'"
 ```
+
+**Default** (no time args): use `--start='2h ago'`.
 
 #### Step 2: Create output directory & set filenames
 
@@ -102,82 +103,55 @@ START_MS=$(( $(date -d "2025-04-01T00:00:00Z" +%s) * 1000 ))
 OUTPUT_DIR="./aws-logs"
 mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-# Derive a safe filename from the log group (replace / with -)
+# Derive safe filename from log group (replace / with -)
 SAFE_NAME=$(echo "$LOG_GROUP" | sed 's|^/||; s|/|-|g')
 RAW_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-raw.log"
 ERRORS_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-errors.log"
 SUMMARY_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-summary.txt"
 ```
 
-#### Step 3: Live tail mode (if `--tail` flag)
+#### Step 3: Live tail mode (if `--tail` or `--watch` flag)
 
-If `--tail` is set, use live tail and skip all other steps:
+If `--tail`/`--watch` is set, stream logs and skip all other steps:
 ```bash
-aws logs tail "$LOG_GROUP" --follow --since "2h" --profile <profile> --region <region>
+AWS_PROFILE=<profile> AWS_REGION=<region> awslogs get <log-group> --watch --start='<last> ago'
 ```
 Tell the user to press `Ctrl+C` to stop. Then exit — do not proceed to other steps.
 
 #### Step 4: Download logs
 
-Use `aws logs filter-log-events` with pagination to handle large result sets:
+Use `awslogs get` to download and save to file:
 
 ```bash
-PROFILE="default"
-REGION="us-east-1"
-
-# Build filter pattern
-FILTER_PATTERN=""  # or user-provided --filter value
-
-# Download with pagination — write raw log messages to file
-NEXT_TOKEN=""
-while true; do
-  if [ -z "$NEXT_TOKEN" ]; then
-    RESPONSE=$(aws logs filter-log-events \
-      --log-group-name "$LOG_GROUP" \
-      --start-time "$START_MS" \
-      --end-time "$END_MS" \
-      ${FILTER_PATTERN:+--filter-pattern "$FILTER_PATTERN"} \
-      --output json \
-      --profile "$PROFILE" \
-      --region "$REGION" \
-      --max-items 10000 2>&1)
-  else
-    RESPONSE=$(aws logs filter-log-events \
-      --log-group-name "$LOG_GROUP" \
-      --start-time "$START_MS" \
-      --end-time "$END_MS" \
-      ${FILTER_PATTERN:+--filter-pattern "$FILTER_PATTERN"} \
-      --output json \
-      --profile "$PROFILE" \
-      --region "$REGION" \
-      --max-items 10000 \
-      --next-token "$NEXT_TOKEN" 2>&1)
-  fi
-
-  # Check for errors
-  if echo "$RESPONSE" | grep -q "ResourceNotFoundException"; then
-    echo "ERROR: Log group $LOG_GROUP not found"
-    break
-  fi
-
-  # Extract and append log messages with timestamps
-  echo "$RESPONSE" | python3 -c "
-import json, sys, datetime
-data = json.load(sys.stdin)
-for event in data.get('events', []):
-    ts = datetime.datetime.fromtimestamp(event['timestamp']/1000).strftime('%Y-%m-%d %H:%M:%S')
-    print(f'[{ts}] {event[\"message\"]}')
-" >> "$RAW_FILE"
-
-  # Check for next page
-  NEXT_TOKEN=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('nextToken',''))" 2>/dev/null)
-  [ -z "$NEXT_TOKEN" ] && break
-
-  echo "  Fetching next page..."
-done
+AWS_PROFILE=<profile> AWS_REGION=<region> awslogs get <log-group> \
+  --start='<start-time>' \
+  --end='<end-time>' \
+  --no-group \
+  --no-stream \
+  --timestamp \
+  > "$RAW_FILE" 2>&1
 ```
 
-**IMPORTANT**: If the raw file is very large (>50MB), warn the user and suggest narrowing the time window.
+**Flags explained:**
+- `--no-group` — omit log group name from output (cleaner)
+- `--no-stream` — omit log stream name from output (cleaner)
+- `--timestamp` — include event timestamp
+
+**If `--streams` is provided**, add `--log-stream-name <stream>` to filter specific streams.
+
+**IMPORTANT**: For large time ranges (>3 days of production), warn the user it may take several minutes and suggest `--errors-only` or a narrower range.
+
+After download, check file size:
+```bash
+ls -lh "$RAW_FILE"
+TOTAL_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
+echo "Downloaded $TOTAL_LINES lines"
+```
+
+If file is empty (0 lines), tell user:
+- Check if the log group exists: `AWS_PROFILE=<profile> AWS_REGION=<region> awslogs groups | grep "<search>"`
+- Check if the time range is correct
+- Check if the region/profile is correct
 
 #### Step 5: Extract errors (unless `--raw` flag)
 
@@ -193,6 +167,11 @@ ERROR_COUNT=$(wc -l < "$ERRORS_FILE" | tr -d ' ')
 TOTAL_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
 ```
 
+**If `--filter` is provided**, apply additional grep:
+```bash
+grep -i "<filter-pattern>" "$RAW_FILE" >> "$ERRORS_FILE"
+```
+
 #### Step 6: Generate error summary (bash only)
 
 ```bash
@@ -203,7 +182,7 @@ TOTAL_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
   echo "  Log Group:   $LOG_GROUP"
   echo "  Profile:     $PROFILE"
   echo "  Region:      $REGION"
-  echo "  Time Range:  $(date -r $((START_MS/1000)) '+%Y-%m-%d %H:%M:%S') → $(date -r $((END_MS/1000)) '+%Y-%m-%d %H:%M:%S')"
+  echo "  Time Range:  $START_TIME → $END_TIME"
   echo "  Total Lines: $TOTAL_LINES"
   echo "  Error Lines: $ERROR_COUNT"
   echo "============================================"
@@ -223,7 +202,7 @@ TOTAL_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
   echo ""
 
   # Errors per hour
-  grep -oP '^\[\K[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}' "$ERRORS_FILE" 2>/dev/null \
+  grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}' "$ERRORS_FILE" 2>/dev/null \
     | sort | uniq -c | sort -k2
 
   echo ""
@@ -250,7 +229,7 @@ cat "$SUMMARY_FILE"
 
 #### Step 7: Quick sanity output
 
-After everything, print to the user:
+After everything, print:
 ```bash
 echo ""
 ls -lh "$OUTPUT_DIR"/*${TIMESTAMP}*
@@ -258,25 +237,32 @@ ls -lh "$OUTPUT_DIR"/*${TIMESTAMP}*
 
 ### If `--errors-only` Flag
 
-Skip saving raw logs to file. Instead, pipe directly through the error grep:
-- Still generate the summary file
-- Only save the errors file
-- Faster for large log volumes
+Pipe awslogs output directly through error grep (skip saving full raw file):
+```bash
+AWS_PROFILE=<profile> AWS_REGION=<region> awslogs get <log-group> \
+  --start='<start>' --end='<end>' --no-group --no-stream --timestamp 2>&1 \
+  | grep -inE "(error|exception|fatal|panic|critical|fail|ECONNREFUSED|ETIMEDOUT|timeout|OOM|OutOfMemory|killed|segfault|status[=: ]5[0-9]{2}|unhandled|uncaught|rejected)" \
+  > "$ERRORS_FILE"
+```
+- Still generate the summary file from errors file
+- Much faster for large log volumes — less disk I/O
 
 ### Error Handling
 
-- **Log group not found**: List available log groups and suggest the closest match:
+- **awslogs not found**: Install with `pip3 install awslogs`
+- **Log group not found / empty results**: List available log groups:
   ```bash
-  aws logs describe-log-groups --log-group-name-prefix "/" --profile <profile> --region <region> --query 'logGroups[].logGroupName' --output text
+  AWS_PROFILE=<profile> AWS_REGION=<region> awslogs groups
   ```
-- **Access denied**: Tell user to check IAM permissions (`logs:FilterLogEvents`, `logs:DescribeLogGroups`, `logs:Tail`)
-- **Empty results**: Suggest widening the time range or checking the environment
-- **Timeout/throttle**: Add `--limit` or suggest a smaller time window
+- **Access denied**: Tell user to check IAM permissions (`logs:GetLogEvents`, `logs:DescribeLogGroups`, `logs:FilterLogEvents`)
+- **Throttling**: awslogs handles pagination automatically — but for very large ranges, suggest narrowing the window or using `--errors-only`
+- **Timeout**: For multi-day ranges, run in background with `&` and check file size periodically
 
 ### Important Rules
 
 - Run ALL log downloading and parsing via **bash commands only** — never read log contents into the conversation
 - Do NOT summarize or analyze log contents with AI — only use grep/awk/sort/uniq
 - Show the summary file output to the user so they can see error counts and patterns
-- For large downloads (>5d of production logs), warn the user it may take a while and suggest `--errors-only`
-- Always confirm the log group exists before attempting download
+- For large downloads (>3d of production logs), warn the user it may take a while and suggest `--errors-only`
+- Always use `AWS_PROFILE=x AWS_REGION=y` env vars prefix style (not --profile flags) — awslogs reads from env vars
+- awslogs handles pagination internally — no need for manual next-token loops

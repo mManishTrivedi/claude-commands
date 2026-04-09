@@ -23,16 +23,16 @@ Delete merged git branches locally and optionally from remote. Protects `main`, 
 
 ### `/aws-logs`
 
-Download AWS CloudWatch logs, extract errors, and generate a summary — all via bash (zero AI tokens spent on log parsing).
+Download AWS CloudWatch logs, extract errors, and generate a summary — all via bash (zero AI tokens spent on log parsing). Uses [`awslogs`](https://github.com/jorgebastida/awslogs) for fast, paginated log retrieval.
 
 ```
-/aws-logs                                             # auto-discover log groups, last 2h
-/aws-logs -g /ecs/my-api-prod -l 5d                   # specific log group, last 5 days
-/aws-logs --prefix /ecs -e staging -l 1h              # discover staging groups, last hour
+/aws-logs -g /ecs/my-api-prod                         # last 2h of logs + error summary
+/aws-logs -g /ecs/my-api-prod -l 5d                   # last 5 days of logs
+/aws-logs -g /ecs/my-api-prod -l 1h -p my-profile     # custom AWS profile
 /aws-logs -g /aws/lambda/my-func -l 2d --errors-only  # lambda logs, errors only
-/aws-logs -p my-profile -l 12h -f "OutOfMemory"       # custom profile + filter pattern
+/aws-logs -g /ecs/my-api-prod -f "OutOfMemory" -l 6h  # download then grep for pattern
 /aws-logs -g /ecs/my-api-prod -t                      # live tail (real-time streaming)
-/aws-logs --from 2025-04-01T00:00:00Z --to 2025-04-02T00:00:00Z  # specific date range
+/aws-logs -g /ecs/my-api-prod --from '2026-04-03 00:00:00' --to '2026-04-03 23:59:59'  # date range
 ```
 
 **Options:**
@@ -41,15 +41,15 @@ Download AWS CloudWatch logs, extract errors, and generate a summary — all via
 |------|-------|---------|-------------|
 | `--log-group` | `-g` | auto-discover | Full CloudWatch log group path |
 | `--prefix` | | `/ecs` | Log group prefix for auto-discovery |
-| `--env` | `-e` | `production` | Environment filter |
 | `--last` | `-l` | `2h` | Time window (`30m`, `2h`, `5d`) |
-| `--from` / `--to` | | | ISO 8601 date range |
+| `--from` / `--to` | | | Date range (`YYYY-MM-DD HH:MM:SS` or ISO 8601) |
 | `--profile` | `-p` | `default` | AWS CLI named profile |
 | `--region` | `-r` | `us-east-1` | AWS region |
-| `--filter` | `-f` | | CloudWatch filter pattern |
-| `--errors-only` | | | Only download error lines (faster) |
-| `--raw` | | | Skip error extraction |
-| `--tail` | `-t` | | Live-stream logs in real time |
+| `--filter` | `-f` | | Grep pattern applied after download |
+| `--errors-only` | | | Pipe through error grep (skip raw file — faster) |
+| `--raw` | | | Skip error extraction, just download |
+| `--tail` / `--watch` | `-t` / `-w` | | Live-stream logs in real time |
+| `--streams` | | | Filter to specific log stream(s) |
 | `--output` | `-o` | `./aws-logs/` | Output directory |
 
 **Outputs** (saved to `./aws-logs/`):
@@ -57,7 +57,7 @@ Download AWS CloudWatch logs, extract errors, and generate a summary — all via
 - `*-errors.log` — filtered error/exception lines
 - `*-summary.txt` — error counts, top patterns by frequency, hourly timeline, HTTP 5xx breakdown
 
-**Requires**: [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) + valid credentials/profile
+**Requires**: [`awslogs`](https://github.com/jorgebastida/awslogs) (`pip3 install awslogs`) + valid AWS credentials/profile
 
 ## Adding Your Own Commands
 
