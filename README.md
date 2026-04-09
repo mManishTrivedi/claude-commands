@@ -1,58 +1,72 @@
 # Claude Commands
 
-A collection of reusable [Claude Code](https://docs.anthropic.com/en/docs/claude-code) slash commands.
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/git-merge-cleanup` | Delete merged git branches locally & remotely. Protects `main`, `master`, and `release*`. |
-| `/aws-logs` | Download AWS CloudWatch logs, extract errors, and generate a summary — all via bash (zero AI tokens on log parsing). |
+A collection of reusable [Claude Code](https://docs.anthropic.com/en/docs/claude-code) slash commands for everyday dev workflows.
 
 ## Install
 
 ```bash
-claude install github:manishtrivedi/claude-commands
+claude install github:<your-username>/claude-commands
 ```
 
-## Usage
-
-Once installed, the commands are available in any Claude Code session:
+## Commands
 
 ### `/git-merge-cleanup`
 
+Delete merged git branches locally and optionally from remote. Protects `main`, `master`, and `release*` by default.
+
 ```
 /git-merge-cleanup                       # delete all merged local branches
-/git-merge-cleanup manish*               # delete merged branches matching pattern
-/git-merge-cleanup --remote              # also delete from remote
-/git-merge-cleanup manish* --remote      # pattern + remote cleanup
+/git-merge-cleanup feature*              # delete merged branches matching a pattern
+/git-merge-cleanup --remote              # also delete from remote (origin)
+/git-merge-cleanup feature* --remote     # pattern + remote cleanup
 ```
 
 ### `/aws-logs`
 
+Download AWS CloudWatch logs, extract errors, and generate a summary — all via bash (zero AI tokens spent on log parsing).
+
 ```
-/aws-logs                                        # last 2h of production API logs + error summary
-/aws-logs -s api -l 5d                           # last 5 days of API logs
-/aws-logs -s store -e staging -l 1h              # staging store logs, last hour
-/aws-logs -s webapp -l 2d --errors-only          # only errors, last 2 days
-/aws-logs -p my-profile -l 12h -f "OutOfMemory"  # filter for specific pattern
-/aws-logs -s api -t                              # live tail (real-time streaming)
+/aws-logs                                             # auto-discover log groups, last 2h
+/aws-logs -g /ecs/my-api-prod -l 5d                   # specific log group, last 5 days
+/aws-logs --prefix /ecs -e staging -l 1h              # discover staging groups, last hour
+/aws-logs -g /aws/lambda/my-func -l 2d --errors-only  # lambda logs, errors only
+/aws-logs -p my-profile -l 12h -f "OutOfMemory"       # custom profile + filter pattern
+/aws-logs -g /ecs/my-api-prod -t                      # live tail (real-time streaming)
 /aws-logs --from 2025-04-01T00:00:00Z --to 2025-04-02T00:00:00Z  # specific date range
 ```
 
+**Options:**
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--log-group` | `-g` | auto-discover | Full CloudWatch log group path |
+| `--prefix` | | `/ecs` | Log group prefix for auto-discovery |
+| `--env` | `-e` | `production` | Environment filter |
+| `--last` | `-l` | `2h` | Time window (`30m`, `2h`, `5d`) |
+| `--from` / `--to` | | | ISO 8601 date range |
+| `--profile` | `-p` | `default` | AWS CLI named profile |
+| `--region` | `-r` | `us-east-1` | AWS region |
+| `--filter` | `-f` | | CloudWatch filter pattern |
+| `--errors-only` | | | Only download error lines (faster) |
+| `--raw` | | | Skip error extraction |
+| `--tail` | `-t` | | Live-stream logs in real time |
+| `--output` | `-o` | `./aws-logs/` | Output directory |
+
 **Outputs** (saved to `./aws-logs/`):
 - `*-raw.log` — full log dump
-- `*-errors.log` — filtered error lines
-- `*-summary.txt` — error counts, top patterns, timeline, HTTP 5xx breakdown
+- `*-errors.log` — filtered error/exception lines
+- `*-summary.txt` — error counts, top patterns by frequency, hourly timeline, HTTP 5xx breakdown
 
-**Requires**: AWS CLI installed + valid credentials/profile
+**Requires**: [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) + valid credentials/profile
 
-## Adding More Commands
+## Adding Your Own Commands
 
-Drop any `.md` file into the `commands/` directory following the [Claude Code command format](https://docs.anthropic.com/en/docs/claude-code/slash-commands):
+Drop any `.md` file into `commands/` following the [Claude Code custom slash command format](https://docs.anthropic.com/en/docs/claude-code/slash-commands):
 
 ```
 commands/
+├── git-merge-cleanup.md
+├── aws-logs.md
 └── your-command.md
 ```
 

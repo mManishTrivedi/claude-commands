@@ -29,8 +29,9 @@ Arguments are key-value flags. All are optional with sensible defaults:
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--service` | `-s` | `api` | Service to fetch logs for: `api`, `store`, `webapp`, or a custom log group path |
-| `--env` | `-e` | `production` | Environment: `production`, `staging` |
+| `--log-group` | `-g` | (auto-discover) | Full CloudWatch log group path (e.g. `/ecs/my-api-prod`) |
+| `--prefix` | | `/ecs` | Log group name prefix — used for auto-discovery if `--log-group` is not set |
+| `--env` | `-e` | `production` | Environment: `production`, `staging`, `dev`, etc. |
 | `--last` | `-l` | `2h` | Time window: `30m`, `2h`, `5d`, etc. (m=minutes, h=hours, d=days) |
 | `--from` | | | Start time: ISO 8601 (`2025-04-01T00:00:00Z`) or epoch ms |
 | `--to` | | | End time: ISO 8601 or epoch ms (defaults to now) |
@@ -43,26 +44,29 @@ Arguments are key-value flags. All are optional with sensible defaults:
 | `--tail` | `-t` | | Live tail mode — stream logs in real time (Ctrl+C to stop) |
 
 **Examples:**
-- `/aws-logs` — last 2h of production API logs + error summary
-- `/aws-logs -s api -l 5d` — last 5 days of API logs
-- `/aws-logs -s store -e staging -l 1h` — staging store logs, last hour
-- `/aws-logs -s webapp --from 2025-04-01T00:00:00Z --to 2025-04-02T00:00:00Z` — specific date range
-- `/aws-logs -p nea-prod -l 2d --errors-only` — only errors, last 2 days
-- `/aws-logs -s api -t` — live tail production API logs
+- `/aws-logs` — auto-discover log groups, pick one, last 2h + error summary
+- `/aws-logs -g /ecs/my-api-prod -l 5d` — specific log group, last 5 days
+- `/aws-logs --prefix /ecs -e staging -l 1h` — discover staging log groups, last hour
+- `/aws-logs -g /aws/lambda/my-func --from 2025-04-01T00:00:00Z --to 2025-04-02T00:00:00Z` — lambda logs, specific range
+- `/aws-logs -p my-profile -l 2d --errors-only` — only errors, last 2 days
+- `/aws-logs -g /ecs/my-api-prod -t` — live tail (real-time streaming)
 - `/aws-logs -f "OutOfMemory"` — filter for specific pattern
 
 ### Log Group Resolution
 
-Map the `--service` + `--env` to CloudWatch log group:
+Resolve the target log group in this order:
 
-| Service | Log Group Pattern |
-|---------|-------------------|
-| `api` | `/ecs/nea-api-{env}` |
-| `store` | `/ecs/nea-store-{env}` |
-| `webapp` | `/ecs/nea-webapp-{env}` |
-| Custom path (starts with `/`) | Use as-is |
-
-If the user provides a service name not in the table and it doesn't start with `/`, try `/ecs/nea-{service}-{env}`.
+1. **If `--log-group` is provided**: Use it directly as-is.
+2. **If `--log-group` is NOT provided**: Auto-discover available log groups:
+   ```bash
+   aws logs describe-log-groups \
+     --log-group-name-prefix "<prefix>" \
+     --profile <profile> --region <region> \
+     --query 'logGroups[].logGroupName' --output text
+   ```
+   - Show the user the list of discovered log groups
+   - Ask which one they want to download logs from
+   - If only one group exists, use it automatically
 
 ### Step-by-Step Execution
 
@@ -98,18 +102,18 @@ START_MS=$(( $(date -d "2025-04-01T00:00:00Z" +%s) * 1000 ))
 OUTPUT_DIR="./aws-logs"
 mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-SERVICE="api"  # resolved service name
-ENV="production"
-RAW_FILE="${OUTPUT_DIR}/${SERVICE}-${ENV}-${TIMESTAMP}-raw.log"
-ERRORS_FILE="${OUTPUT_DIR}/${SERVICE}-${ENV}-${TIMESTAMP}-errors.log"
-SUMMARY_FILE="${OUTPUT_DIR}/${SERVICE}-${ENV}-${TIMESTAMP}-summary.txt"
+# Derive a safe filename from the log group (replace / with -)
+SAFE_NAME=$(echo "$LOG_GROUP" | sed 's|^/||; s|/|-|g')
+RAW_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-raw.log"
+ERRORS_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-errors.log"
+SUMMARY_FILE="${OUTPUT_DIR}/${SAFE_NAME}-${TIMESTAMP}-summary.txt"
 ```
 
 #### Step 3: Live tail mode (if `--tail` flag)
 
 If `--tail` is set, use live tail and skip all other steps:
 ```bash
-aws logs tail "/ecs/nea-api-production" --follow --since "2h" --profile <profile> --region <region>
+aws logs tail "$LOG_GROUP" --follow --since "2h" --profile <profile> --region <region>
 ```
 Tell the user to press `Ctrl+C` to stop. Then exit — do not proceed to other steps.
 
@@ -118,7 +122,6 @@ Tell the user to press `Ctrl+C` to stop. Then exit — do not proceed to other s
 Use `aws logs filter-log-events` with pagination to handle large result sets:
 
 ```bash
-LOG_GROUP="/ecs/nea-api-production"
 PROFILE="default"
 REGION="us-east-1"
 
@@ -197,8 +200,6 @@ TOTAL_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
   echo "============================================"
   echo "  AWS LOG SUMMARY"
   echo "============================================"
-  echo "  Service:     $SERVICE"
-  echo "  Environment: $ENV"
   echo "  Log Group:   $LOG_GROUP"
   echo "  Profile:     $PROFILE"
   echo "  Region:      $REGION"
@@ -252,7 +253,6 @@ cat "$SUMMARY_FILE"
 After everything, print to the user:
 ```bash
 echo ""
-echo "📁 Files saved to $OUTPUT_DIR/"
 ls -lh "$OUTPUT_DIR"/*${TIMESTAMP}*
 ```
 
@@ -267,7 +267,7 @@ Skip saving raw logs to file. Instead, pipe directly through the error grep:
 
 - **Log group not found**: List available log groups and suggest the closest match:
   ```bash
-  aws logs describe-log-groups --log-group-name-prefix "/ecs/nea-" --profile <profile> --region <region> --query 'logGroups[].logGroupName' --output text
+  aws logs describe-log-groups --log-group-name-prefix "/" --profile <profile> --region <region> --query 'logGroups[].logGroupName' --output text
   ```
 - **Access denied**: Tell user to check IAM permissions (`logs:FilterLogEvents`, `logs:DescribeLogGroups`, `logs:Tail`)
 - **Empty results**: Suggest widening the time range or checking the environment
