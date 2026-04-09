@@ -5,7 +5,7 @@ A collection of reusable [Claude Code](https://docs.anthropic.com/en/docs/claude
 ## Install
 
 ```bash
-claude install github:<your-username>/claude-commands
+claude install github:mManishTrivedi/claude-commands
 ```
 
 ## Commands
